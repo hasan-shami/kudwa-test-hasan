@@ -33,7 +33,7 @@ def tool_run_sql(sql: str, named_params: Dict[str, Any] | None = None) -> Dict[s
     return run_select(safe, named_params, max_rows=MAX_ROWS)
 
 # JSON schemas for tool calling
-tool_schemas: List[Dict[str, Any]] = [
+tool_schemas = [
     {
         "type": "function",
         "name": "tool_list_tables",
@@ -48,7 +48,7 @@ tool_schemas: List[Dict[str, Any]] = [
             "type": "object",
             "required": ["table_name"],
             "properties": {"table_name": {"type": "string"}}
-        },
+        }
     },
     {
         "type": "function",
@@ -61,6 +61,7 @@ tool_schemas: List[Dict[str, Any]] = [
                 "sql": {"type": "string"},
                 "named_params": {"type": "object", "additionalProperties": True}
             }
-        },
+        }
     },
 ]
+

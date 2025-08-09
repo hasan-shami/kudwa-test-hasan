@@ -1,60 +1,133 @@
 from __future__ import annotations
 import os, json
-from openai import OpenAI
 from typing import Dict, Any, List
+from openai import OpenAI
 from .prompts import SYSTEM
 from .tools import tool_schemas, tool_list_tables, tool_describe_table, tool_run_sql
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+LOG_LLM = os.getenv("LOG_LLM", "0") == "1"
+
 client = OpenAI()
 
-# Local dispatcher mapping tool name -> function
 TOOL_IMPL = {
     "tool_list_tables": lambda args: tool_list_tables(),
     "tool_describe_table": lambda args: tool_describe_table(args["table_name"]),
-    "tool_run_sql": lambda args: tool_run_sql(args["sql"], args.get("named_params")),
+    "tool_run_sql":     lambda args: tool_run_sql(args["sql"], args.get("named_params")),
 }
 
+def _log(label: str, obj: Any):
+    if LOG_LLM:
+        try:
+            print(f"[LLM DEBUG] {label}:", json.dumps(obj, indent=2)[:4000])
+        except Exception:
+            print(f"[LLM DEBUG] {label} (non-json):", str(obj)[:4000])
+
+def _extract_text(resp) -> str:
+    # Prefer output_text; fall back to concatenating message segments
+    try:
+        if getattr(resp, "output_text", None):
+            return resp.output_text
+    except Exception:
+        pass
+    # Fallback: scan outputs for message text segments
+    parts = []
+    try:
+        for item in getattr(resp, "output", []) or []:
+            if getattr(item, "type", "") == "message" and getattr(item, "content", None):
+                for seg in item.content:
+                    if getattr(seg, "type", "") == "output_text" and getattr(seg, "text", None):
+                        parts.append(seg.text)
+    except Exception:
+        pass
+    return "".join(parts).strip()
+
 def run_agent(messages: List[Dict[str, str]]) -> Dict[str, Any]:
-    """
-    Single-turn tool loop:
-      user/system messages -> model -> (optional) tool calls -> model -> final JSON
-    """
-    response = client.responses.create(
+    # 1) First call – expect tool calls
+    first = client.responses.create(
         model=MODEL,
-        messages=[{"role": "system", "content": SYSTEM}] + messages,
+        input=[{"role": "system", "content": SYSTEM}, *messages],
         tools=tool_schemas,
         temperature=0.2,
     )
+    _log("first_response", first.model_dump())
 
-    # Process tool calls (parallel friendly)
+    print("OUTPUT TYPES:", [getattr(x, "type", None) for x in (first.output or [])])
+    for i, x in enumerate(first.output or []):
+        print(f"ITEM {i} TYPE:", getattr(x, "type", None))
+        if getattr(x, "type", None) == "message":
+            print("  message role:", getattr(x, "role", None))
+            print("  segments:", [getattr(s, "type", None) for s in (x.content or [])])
+
+    def _iter_calls(resp):
+        for item in (getattr(resp, "output", []) or []):
+            t = getattr(item, "type", "") or ""
+            if t in ("function_call", "tool_call"):
+                call = getattr(item, "function_call", None) or getattr(item, "tool_call", None)
+                if call:
+                    yield item, call
+
     tool_outputs = []
-    for item in response.output:
-        if item.type == "tool_call":
-            name = item.tool_call.name
-            args = json.loads(item.tool_call.arguments or "{}")
-            result = TOOL_IMPL[name](args)
-            tool_outputs.append({
-                "tool_call_id": item.tool_call.id,
-                "output": json.dumps(result)
+    func_calls = []
+    for item in (first.output or []):
+        if getattr(item, "type", "") == "function_call":
+            func_calls.append({
+                "type": "function_call",
+                "id": getattr(item, "id", None),  # keep if available
+                "call_id": item.call_id,  # REQUIRED
+                "name": item.name,
+                "arguments": item.arguments or "{}",
             })
 
-    # If tools were called, send their outputs back for a final answer
-    if tool_outputs:
-        response = client.responses.create(
+            # 2) Execute tools and build outputs
+            func_outputs = []
+            for fc in func_calls:
+                name = fc["name"]
+                args_json = fc["arguments"] or "{}"
+                try:
+                    args = json.loads(args_json)
+                except Exception:
+                    args = {}
+                impl = TOOL_IMPL.get(name)
+                try:
+                    result = impl(args) if impl else {"error": f"unknown tool '{name}'"}
+                except Exception as e:
+                    result = {"error": str(e)}
+
+                func_outputs.append({
+                    "type": "function_call_output",
+                    "call_id": fc["call_id"],  # MUST MATCH the function_call above
+                    "output": json.dumps(result),  # string, not array
+                })
+
+    final_resp = first
+    if func_outputs:
+        final_resp = client.responses.create(
             model=MODEL,
-            messages=[{"role": "system", "content": SYSTEM}] + messages,
-            tool_outputs=tool_outputs,
+            input=[
+                {"role": "system", "content": SYSTEM},
+                *messages,
+                *func_calls,  # <-- include original function_call(s)
+                *func_outputs,  # <-- then their outputs
+            ],
+            tools=tool_schemas,
+            tool_choice="auto",
             temperature=0.2,
         )
+        _log("second_response", final_resp.model_dump())
 
-    # Expecting a single JSON object from the model
-    final_chunks = [c for c in response.output if c.type == "message"]
-    text = ""
-    if final_chunks and final_chunks[0].content:
-        text = "".join([seg.text for seg in final_chunks[0].content if getattr(seg, "text", None)])
+    text = _extract_text(final_resp)
 
+    # Try to parse the expected JSON envelope from the model
+    result: Dict[str, Any]
     try:
-        return json.loads(text)
+        result = json.loads(text)
     except Exception:
-        return {"answer": text.strip()[:2000], "table_preview": None, "followups": []}
+        result = {"answer": text}
+
+    # Ensure keys exist
+    return {
+        "answer": result.get("answer", text or "(no answer)"),
+        "table_preview": result.get("table_preview"),
+        "followups": result.get("followups", []),
+    }

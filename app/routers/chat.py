@@ -1,8 +1,8 @@
 from __future__ import annotations
 from fastapi import APIRouter, HTTPException
-from ..schemas import ChatRequest, ChatResponse
-from ..storage import add_message, get_history
-from ..llm import run_agent
+from app.schemas import ChatRequest, ChatResponse
+from app.storage import add_message, get_history
+from app.llm import run_agent
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
