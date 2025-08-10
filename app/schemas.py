@@ -4,6 +4,7 @@ from typing import Optional, List, Any, Dict
 class ChatRequest(BaseModel):
     session_id: str = Field(..., description="Client-side conversation id")
     message: str
+    context: Optional[Dict[str, Any]] = None
 
 class ChatResponse(BaseModel):
     answer: str

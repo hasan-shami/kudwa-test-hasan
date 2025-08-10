@@ -20,6 +20,23 @@ Example answers:
 - "Cash flow improved significantly with better collection rates"
 - "Seasonal patterns show December revenue peaks at 180% of monthly average"
 
+Known categories:
+- operating_expenses
+- revenue
+- cost_of_goods_sold
+- non_operating_expenses
+
+Alias mapping for natural language:
+- "Operating Expenses", "Opex" → operating_expenses
+- "Cost of Goods Sold", "COGS" → cogs
+
+Rules:
+- Always use the exact DB value in SQL WHERE clauses.
+- Always use general business rules for questions on profit/net income
+- Always name bindings exactly as :year and :quarter (lowercase). Do not use aliases like :Year, :yr, :q, or :qtr.
+- Before filtering by a categorical value, if unsure, call tool_distinct_values('data','category'). Otherwise use the canonical mapping.
+- When using tool_run_sql, always supply a named_params dict with all bindings for :param placeholders in the SQL. Example: {"sql": "... WHERE year = :year", "named_params": {"year": 2023}}.
+
 Output:
 - A JSON object with: { "answer": "<concise text>", "table_preview": <up to 10 rows>, "followups": ["..."] }.
 """

@@ -1,9 +1,9 @@
 from __future__ import annotations
-import os, json
+import os, json, re
 from typing import Dict, Any, List
 from openai import OpenAI
 from .prompts import SYSTEM
-from .tools import tool_schemas, tool_list_tables, tool_describe_table, tool_run_sql
+from .tools import tool_schemas, tool_list_tables, tool_describe_table, tool_run_sql,tool_sample_rows, tool_distinct_values
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 LOG_LLM = os.getenv("LOG_LLM", "0") == "1"
@@ -13,7 +13,14 @@ client = OpenAI()
 TOOL_IMPL = {
     "tool_list_tables": lambda args: tool_list_tables(),
     "tool_describe_table": lambda args: tool_describe_table(args["table_name"]),
-    "tool_run_sql":     lambda args: tool_run_sql(args["sql"], args.get("named_params")),
+    "tool_run_sql": lambda args: tool_run_sql(
+        args["sql"],
+        # accept either "named_params" or "parameters"
+        args.get("named_params") or args.get("parameters") or {}
+    ),
+    "tool_sample_rows": lambda args: tool_sample_rows(args["table_name"], args.get("limit", 5)),
+    "tool_distinct_values": lambda args: tool_distinct_values(args["table_name"], args["column"],
+                                                              args.get("limit", 100)),
 }
 
 def _log(label: str, obj: Any):
@@ -42,90 +49,133 @@ def _extract_text(resp) -> str:
         pass
     return "".join(parts).strip()
 
-def run_agent(messages: List[Dict[str, str]]) -> Dict[str, Any]:
-    # 1) First call – expect tool calls
-    first = client.responses.create(
-        model=MODEL,
-        input=[{"role": "system", "content": SYSTEM}, *messages],
-        tools=tool_schemas,
-        temperature=0.2,
-    )
-    _log("first_response", first.model_dump())
+def run_agent(messages: List[Dict[str, str]], context: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    context = context or {}
 
-    print("OUTPUT TYPES:", [getattr(x, "type", None) for x in (first.output or [])])
-    for i, x in enumerate(first.output or []):
-        print(f"ITEM {i} TYPE:", getattr(x, "type", None))
-        if getattr(x, "type", None) == "message":
-            print("  message role:", getattr(x, "role", None))
-            print("  segments:", [getattr(s, "type", None) for s in (x.content or [])])
+    dev_msg = {
+        "role": "developer",
+        "content": (
+            "Request context (authoritative parameters to use for SQL named bindings): "
+            + json.dumps(context)
+        )
+    }
 
-    def _iter_calls(resp):
-        for item in (getattr(resp, "output", []) or []):
-            t = getattr(item, "type", "") or ""
-            if t in ("function_call", "tool_call"):
-                call = getattr(item, "function_call", None) or getattr(item, "tool_call", None)
-                if call:
-                    yield item, call
+    base_input = [{"role": "system", "content": SYSTEM}, dev_msg, *messages]
 
-    tool_outputs = []
-    func_calls = []
-    for item in (first.output or []):
-        if getattr(item, "type", "") == "function_call":
-            func_calls.append({
-                "type": "function_call",
-                "id": getattr(item, "id", None),  # keep if available
-                "call_id": item.call_id,  # REQUIRED
-                "name": item.name,
-                "arguments": item.arguments or "{}",
-            })
-
-            # 2) Execute tools and build outputs
-            func_outputs = []
-            for fc in func_calls:
-                name = fc["name"]
-                args_json = fc["arguments"] or "{}"
-                try:
-                    args = json.loads(args_json)
-                except Exception:
-                    args = {}
-                impl = TOOL_IMPL.get(name)
-                try:
-                    result = impl(args) if impl else {"error": f"unknown tool '{name}'"}
-                except Exception as e:
-                    result = {"error": str(e)}
-
-                func_outputs.append({
-                    "type": "function_call_output",
-                    "call_id": fc["call_id"],  # MUST MATCH the function_call above
-                    "output": json.dumps(result),  # string, not array
-                })
-
-    final_resp = first
-    if func_outputs:
-        final_resp = client.responses.create(
+    def call_model(cur_input):
+        resp = client.responses.create(
             model=MODEL,
-            input=[
-                {"role": "system", "content": SYSTEM},
-                *messages,
-                *func_calls,  # <-- include original function_call(s)
-                *func_outputs,  # <-- then their outputs
-            ],
+            input=cur_input,
             tools=tool_schemas,
             tool_choice="auto",
             temperature=0.2,
         )
-        _log("second_response", final_resp.model_dump())
+        _log("responses.create", resp.model_dump())
+        return resp
 
+    def _merge_context_params(sql: str, named_params: Dict[str, Any]) -> Dict[str, Any]:
+        # Find all :placeholders (case-insensitive)
+        needed_raw = set(re.findall(r":(\w+)", sql))
+        needed = {p for p in needed_raw}
+
+        # Normalize context keys to lowercase for tolerant matching
+        ctx_lc = {str(k).lower(): v for k, v in (context or {}).items()}
+
+        # Also build a tolerant view of named_params (don’t rename, just help matching)
+        out = dict(named_params or {})
+
+        # Alias map for common LLM variations
+        alias_map = {
+            "yr": "year",
+            "yy": "year",
+            "yyyy": "year",
+            "year": "year",
+            "q": "quarter",
+            "qtr": "quarter",
+            "quarter": "quarter",
+            # add more if you see them in logs
+        }
+
+        for k in needed:
+            if k in out:
+                continue  # model already supplied it
+            k_lc = k.lower()
+            # exact lower match from context
+            if k_lc in ctx_lc:
+                out[k] = ctx_lc[k_lc]
+                continue
+            # alias match (e.g., :QTR -> context['quarter'])
+            alias = alias_map.get(k_lc)
+            if alias and alias in ctx_lc:
+                out[k] = ctx_lc[alias]
+                continue
+
+        return out
+
+    # Up to N tool rounds
+    MAX_ROUNDS = 5
+    cur_input = list(base_input)
+    final_resp = None
+
+    for _round in range(MAX_ROUNDS):
+        resp = call_model(cur_input)
+        final_resp = resp
+
+        # Collect all function calls in this round
+        func_calls = []
+        for item in (resp.output or []):
+            if getattr(item, "type", "") == "function_call":
+                func_calls.append({
+                    "type": "function_call",
+                    "id": getattr(item, "id", None),
+                    "call_id": item.call_id,           # REQUIRED for echo
+                    "name": item.name,
+                    "arguments": item.arguments or "{}",
+                })
+
+        # If no tool calls, we’re done
+        if not func_calls:
+            break
+
+        # Execute calls and build outputs
+        func_outputs = []
+        for fc in func_calls:
+            name = fc["name"]
+            args_json = fc["arguments"] or "{}"
+            try:
+                args = json.loads(args_json)
+            except Exception:
+                args = {}
+            impl = TOOL_IMPL.get(name)
+            try:
+                if name == "tool_run_sql":
+                    sql = args.get("sql", "")
+                    params = args.get("named_params") or args.get("parameters") or {}
+                    params = _merge_context_params(sql, params)  # <-- enforce your context
+                    result = TOOL_IMPL["tool_run_sql"]({"sql": sql, "named_params": params})
+                else:
+                    result = impl(args) if impl else {"error": f"unknown tool '{name}'"}
+            except Exception as e:
+                result = {"error": str(e)}
+
+            func_outputs.append({
+                "type": "function_call_output",
+                "call_id": fc["call_id"],            # MUST match
+                "output": json.dumps(result),        # STRING
+            })
+
+        # Prepare next-round input by appending both the calls and their outputs
+        cur_input = list(base_input) + func_calls + func_outputs
+
+    # Extract final text
     text = _extract_text(final_resp)
 
-    # Try to parse the expected JSON envelope from the model
-    result: Dict[str, Any]
+    # Parse your JSON envelope if present
     try:
         result = json.loads(text)
     except Exception:
         result = {"answer": text}
 
-    # Ensure keys exist
     return {
         "answer": result.get("answer", text or "(no answer)"),
         "table_preview": result.get("table_preview"),

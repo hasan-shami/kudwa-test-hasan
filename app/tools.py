@@ -32,6 +32,17 @@ def tool_run_sql(sql: str, named_params: Dict[str, Any] | None = None) -> Dict[s
     safe = ensure_safe_sql(sql)
     return run_select(safe, named_params, max_rows=MAX_ROWS)
 
+def tool_sample_rows(table_name: str, limit: int = 5):
+    # basic preview to see column names and example values
+    safe_table = table_name.replace("'", "''")
+    return run_select(f"SELECT * FROM '{safe_table}' LIMIT :lim", {"lim": limit})
+
+def tool_distinct_values(table_name: str, column: str, limit: int = 100):
+    safe_table = table_name.replace("'", "''")
+    safe_col = column.replace('"', '""')
+    sql = f'SELECT DISTINCT "{safe_col}" AS value FROM "{safe_table}" WHERE "{safe_col}" IS NOT NULL ORDER BY 1 LIMIT :lim'
+    return run_select(sql, {"lim": limit})
+
 # JSON schemas for tool calling
 tool_schemas = [
     {
@@ -53,13 +64,44 @@ tool_schemas = [
     {
         "type": "function",
         "name": "tool_run_sql",
-        "description": "Execute a read-only SELECT query with optional named parameters. Returns columns and rows.",
+        "description": "Execute a read-only SELECT with named parameters. Use the 'named_params' object (NOT 'parameters').",
         "parameters": {
             "type": "object",
             "required": ["sql"],
             "properties": {
                 "sql": {"type": "string"},
-                "named_params": {"type": "object", "additionalProperties": True}
+                "named_params": {
+                    "type": "object",
+                    "description": "Key-value pairs for SQL bindings, e.g., {'year': 2024} for :year",
+                    "additionalProperties": True
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "name": "tool_sample_rows",
+        "description": "Preview a few rows from a table to see actual values.",
+        "parameters": {
+            "type": "object",
+            "required": ["table_name"],
+            "properties": {
+                "table_name": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 5}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "name": "tool_distinct_values",
+        "description": "List distinct values in a column to understand valid categories.",
+        "parameters": {
+            "type": "object",
+            "required": ["table_name", "column"],
+            "properties": {
+                "table_name": {"type": "string"},
+                "column": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}
             }
         }
     },

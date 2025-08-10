@@ -12,7 +12,7 @@ def chat(req: ChatRequest):
     history = get_history(req.session_id)
     history = history + [{"role": "user", "content": req.message}]
     try:
-        result = run_agent(history)
+        result = run_agent(history, context=req.context or {})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
