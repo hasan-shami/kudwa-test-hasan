@@ -5,10 +5,14 @@ from openai import OpenAI
 from .prompts import SYSTEM
 from .tools import tool_schemas, tool_list_tables, tool_describe_table, tool_run_sql,tool_sample_rows, tool_distinct_values
 
+from dotenv import load_dotenv
+load_dotenv(override=False)
+
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 LOG_LLM = os.getenv("LOG_LLM", "0") == "1"
-
-client = OpenAI()
+API_KEY = os.getenv("OPENAI_API_KEY")
+assert API_KEY, "OPENAI_API_KEY not found"
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 TOOL_IMPL = {
     "tool_list_tables": lambda args: tool_list_tables(),

@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import chat
+from app.routers import chat
 
 app = FastAPI(title="Kudwa Chatbot API", version="0.1.0")
 
