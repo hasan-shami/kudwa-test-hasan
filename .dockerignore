@@ -1,0 +1,38 @@
+# python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.csv
+dist/
+build/
+.venv/
+venv/
+db_setup_module/
+
+# node / front-end leftovers
+node_modules/
+.build/
+.next/
+*.log
+
+# vcs / os
+.git/
+.gitignore
+.DS_Store
+
+# env / secrets (keep out of build context)
+.env
+.env.*
+
+# local data & logs
+data/*
+!data/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# tests & docs (optional)
+tests/
+docs/
