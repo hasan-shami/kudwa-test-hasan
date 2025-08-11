@@ -1,0 +1,7 @@
+services:
+  type: web
+  name: kudwa-api
+  env: docker
+  autoDeploy: true
+  healthCheckPath: /health
+  region: frankfurt
