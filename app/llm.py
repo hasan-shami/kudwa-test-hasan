@@ -2,6 +2,7 @@ from __future__ import annotations
 import os, json, re
 from typing import Dict, Any, List
 from openai import OpenAI
+from datetime import datetime
 from .prompts import SYSTEM
 from .tools import tool_schemas, tool_list_tables, tool_describe_table, tool_run_sql,tool_sample_rows, tool_distinct_values
 
@@ -54,8 +55,14 @@ def _extract_text(resp) -> str:
     return "".join(parts).strip()
 
 def run_agent(messages: List[Dict[str, str]], context: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    now = datetime.now()
     context = context or {}
-
+    context.update({
+        "current_date": now.strftime("%Y-%m-%d"),
+        "current_year": now.year,
+        "current_quarter": (now.month - 1) // 3 + 1,
+        "current_month": now.month
+    })
     dev_msg = {
         "role": "developer",
         "content": (
@@ -94,10 +101,10 @@ def run_agent(messages: List[Dict[str, str]], context: Dict[str, Any] | None = N
             "yy": "year",
             "yyyy": "year",
             "year": "year",
+            "thisyear": "current_year",
             "q": "quarter",
             "qtr": "quarter",
             "quarter": "quarter",
-            # add more if you see them in logs
         }
 
         for k in needed:
