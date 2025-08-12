@@ -108,7 +108,7 @@ def parse_financial_file(source):
         raise ValueError("Unrecognized financial data format")
 
 def map_account_to_category(acct):
-    category_df = pd.read_csv('local/df_cat.csv')
+    category_df = pd.read_csv('db_setup_module/local/df_cat.csv')
     category_map = category_df.to_dict(orient='list')
 
     # 1) guard against nulls
@@ -272,7 +272,7 @@ def process_data(df1):
     df1['period_end'] = pd.to_datetime(df1['period_end'])
 
     # canonical period month
-    df1["period_month"] = df1["period_start"].dt.to_period("M").astype(str)  # e.g., "2020-01"
+    df1["year_month_text"] = df1["period_start"].dt.to_period("M").astype(str)  # e.g., "2020-01"
     df1 = df1.drop('period_key', axis=1)
     # handy dims (optional)
     df1["year"] = df1["period_start"].dt.year.astype("Int64")
@@ -280,8 +280,38 @@ def process_data(df1):
     df1["quarter"] = df1["period_start"].dt.quarter.astype("Int64")
 
     df1['account'] = df1['account'].str.replace(r'_\d+$', '', regex=True)
+    df1['source'] = 'quickbooks'
 
     return df1
+
+
+def process_rootfi_file(df_rootfi):
+    df_rootfi = df_rootfi[df_rootfi['parent_uid'].str.match(r'^[A-Za-z0-9_]+:/[^/].*$', na=False)]
+    df_rootfi['account'] = df_rootfi['path'].str.split('/', n=1).str[1]
+    df_rootfi['account'] = (
+        df_rootfi['account']
+        .str.lower()
+        .str.replace(r'[^a-z0-9]+', '_', regex=True)
+        .str.strip('_')
+    )
+
+    df_rootfi = df_rootfi.rename(columns={
+        'section': 'category',
+        'element_id': 'account_id',
+        'reported_value': 'value',
+    })
+
+    df_rootfi["year_month_text"] = df_rootfi["period_start"].dt.to_period("M").astype(str)  # e.g., "2020-01"
+    df_rootfi["year"] = df_rootfi["period_start"].dt.year.astype("Int64")
+    df_rootfi["month"] = df_rootfi["period_start"].dt.month.astype("Int64")
+    df_rootfi["quarter"] = df_rootfi["period_start"].dt.quarter.astype("Int64")
+
+    df_rootfi['source'] = 'rootfi'
+    df_rootfi = df_rootfi[['account','account_id','period_start','period_end','value','category',
+                           'year_month_text','year','month','quarter','source']]
+    return df_rootfi
+
+
 
 def write_to_sql(df):
     import sqlite3
