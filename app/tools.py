@@ -23,7 +23,7 @@ def ensure_safe_sql(sql: str) -> str:
 
 # Exposed tool functions (called by the LLM)
 def tool_list_tables() -> Dict[str, Any]:
-    return {"tables": list_tables()}
+    return {"tables": list_tables(include_views=True, include_tables=False)}
 
 def tool_describe_table(table_name: str) -> Dict[str, Any]:
     return {"table": table_name, "columns": describe_table(table_name)}

@@ -17,28 +17,37 @@ def ro_conn():
     finally:
         conn.close()
 
-def list_tables(include_views: bool = True, only: list[str] | None = None):
+def list_tables(
+    include_views: bool = True,
+    include_tables: bool = True,
+    only: list[str] | None = None
+):
     with ro_conn() as c:
+        types = []
+        if include_tables:
+            types.append("table")
         if include_views:
-            rows = c.execute("""
-                SELECT name, type
-                FROM sqlite_schema
-                WHERE type IN ('view','table') AND name NOT LIKE 'sqlite_%'
-                ORDER BY CASE type WHEN 'view' THEN 0 ELSE 1 END, name
-            """).fetchall()
-        else:
-            rows = c.execute("""
-                SELECT name, type
-                FROM sqlite_schema
-                WHERE type='table' AND name NOT LIKE 'sqlite_%'
-                ORDER BY name
-            """).fetchall()
+            types.append("view")
+
+        if not types:
+            return []  # nothing to include
+
+        placeholders = ",".join(f"'{t}'" for t in types)
+
+        rows = c.execute(f"""
+            SELECT name, type
+            FROM sqlite_schema
+            WHERE type IN ({placeholders})
+              AND name NOT LIKE 'sqlite_%'
+            ORDER BY CASE type WHEN 'view' THEN 0 ELSE 1 END, name
+        """).fetchall()
 
         names = [r["name"] for r in rows]
         if only:
             only_set = set(only)
             names = [n for n in names if n in only_set]
         return names
+
 
 def describe_table(table: str):
     """
