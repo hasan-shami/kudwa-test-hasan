@@ -3,6 +3,7 @@ import json
 import re
 from datetime import datetime
 
+
 def detect_file_type(json_data):
     if "data" in json_data and isinstance(json_data["data"], dict):
         if "Header" in json_data["data"]:
@@ -27,6 +28,7 @@ def _parse_quickbooks(data):
 
     # Recursively traverse rows
     entries = []
+
     def recurse_rows(section):
         for row in section.get('Rows', {}).get('Row', []):
             rtype = row.get('type')
@@ -36,7 +38,7 @@ def _parse_quickbooks(data):
                     'account': name_cell['value'],
                     'account_id': name_cell.get('id')
                 }
-                for i, cell in enumerate(row['ColData'][1:len(periods)+1]):
+                for i, cell in enumerate(row['ColData'][1:len(periods) + 1]):
                     val = cell.get('value')
                     entries.append({
                         **base,
@@ -47,6 +49,7 @@ def _parse_quickbooks(data):
                     })
             elif rtype == 'Section':
                 recurse_rows(row)
+
     recurse_rows(data)
 
     return pd.DataFrame(entries)
@@ -55,6 +58,7 @@ def _parse_quickbooks(data):
 def _parse_rootfi(records):
     # Flatten nested line items with category context
     entries = []
+
     def dfs(items, category, period_start, period_end, path):
         for item in items:
             base = {
@@ -107,6 +111,7 @@ def parse_financial_file(source):
     else:
         raise ValueError("Unrecognized financial data format")
 
+
 def map_account_to_category(acct):
     category_df = pd.read_csv('db_setup_module/local/df_cat.csv')
     category_map = category_df.to_dict(orient='list')
@@ -124,6 +129,7 @@ def map_account_to_category(acct):
         return "operating_expenses"
     return "unknown"
 
+
 # which sections to walk and their natural sign (expenses negative if you want signed sums)
 SECTION_SPECS = {
     "revenue": +1,
@@ -134,22 +140,25 @@ SECTION_SPECS = {
     "taxes": -1,
 }
 
+
 def _to_float(x):
     try:
         return float(x) if x is not None else 0.0
     except Exception:
         return 0.0
 
+
 def _parse_dates(rec):
     # prefer explicit period_start/period_end
     start = rec.get("period_start")
-    end   = rec.get("period_end")
+    end = rec.get("period_end")
     if not (start and end):
         pid = rec.get("platform_id") or ""
         m = re.match(r"(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})", pid)
         if m:
             start, end = m.group(1), m.group(2)
     return start, end
+
 
 def _record_meta(rec):
     # Bring forward scalar metadata automatically (no hardcoding)
@@ -160,17 +169,18 @@ def _record_meta(rec):
     # Normalize dates
     ps, pe = _parse_dates(rec)
     keep["period_start"] = ps
-    keep["period_end"]   = pe
+    keep["period_end"] = pe
     # Helpful normalized columns
     if pe:
         keep["period_end_date"] = pe
         try:
             dt = datetime.fromisoformat(pe)
-            keep["period_year"]  = dt.year
+            keep["period_year"] = dt.year
             keep["period_month"] = dt.month
         except Exception:
             pass
     return keep
+
 
 def _node_ids_map(node):
     # grab every id-ish key: 'id' or '*_id' (case-insensitive)
@@ -182,6 +192,7 @@ def _node_ids_map(node):
                 ids[k] = str(v)
     return ids
 
+
 def _primary_element_id(ids_map):
     # sensible priority without hardcoding to a single field
     for pref in ("account_id", "accountId", "element_id", "id"):
@@ -189,6 +200,7 @@ def _primary_element_id(ids_map):
             return ids_map[pref]
     # otherwise first available
     return next(iter(ids_map.values()), None)
+
 
 def flatten_rootfi(records: list, value_mode: str = "leaf") -> pd.DataFrame:
     """
@@ -226,7 +238,7 @@ def flatten_rootfi(records: list, value_mode: str = "leaf") -> pd.DataFrame:
         node_uid = element_id or f"{section}:{path}/{name}".strip("/")
 
         row = {
-            **period_meta,                     # all record-level meta incl. dates
+            **period_meta,  # all record-level meta incl. dates
             "section": section,
             "name": name,
             "node_uid": node_uid,
@@ -240,7 +252,7 @@ def flatten_rootfi(records: list, value_mode: str = "leaf") -> pd.DataFrame:
             "value_use": value_use,
             "signed_value_use": value_use * sign,
             "element_id": element_id,
-            "node_ids": ids_map,              # keep the full id dict too
+            "node_ids": ids_map,  # keep the full id dict too
         }
         # also break out each id key as its own column (DataFrame will align)
         for k, v in ids_map.items():
@@ -307,17 +319,17 @@ def process_rootfi_file(df_rootfi):
     df_rootfi["quarter"] = df_rootfi["period_start"].dt.quarter.astype("Int64")
 
     df_rootfi['source'] = 'rootfi'
-    df_rootfi = df_rootfi[['account','account_id','period_start','period_end','value','category',
-                           'year_month_text','year','month','quarter','source']]
+    df_rootfi = df_rootfi[['account', 'account_id', 'period_start', 'period_end', 'value', 'category',
+                           'year_month_text', 'year', 'month', 'quarter', 'source']]
     return df_rootfi
-
 
 
 def write_to_sql(df):
     import sqlite3
     con = sqlite3.connect("../data.db")
 
-    df.to_sql("data", con, if_exists="replace",index=False)
+    df.to_sql("data", con, if_exists="replace", index=False)
+
 
 def read_from_sqlite(query):
     import sqlite3
