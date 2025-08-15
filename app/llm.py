@@ -158,7 +158,7 @@ def run_agent(messages: List[Dict[str, str]], context: Dict[str, Any] | None = N
         # Normalize context keys to lowercase for tolerant matching
         ctx_lc = {str(k).lower(): v for k, v in (context or {}).items()}
 
-        # Also build a tolerant view of named_params (don’t rename, just help matching)
+        # Build a tolerant view of named_params
         out = dict(named_params or {})
 
         # Alias map for common LLM variations
